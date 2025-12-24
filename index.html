@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <title>خريطة الشهداء</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
+  <style>
+    body {
+      margin: 0;
+      display: flex;
+      background-color: #1e1e1e;
+      color: white;
+      font-family: 'Cairo', sans-serif;
+      height: 100vh;
+    }
+    #map {
+      width: 100%;
+      height: 100vh;
+      position: relative;
+    }
+    #chartContainer {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(44, 44, 44, 0.85);
+      padding: 10px;
+      border-radius: 8px;
+      width: 280px;
+      z-index: 1000;
+      color: white;
+    }
+    #victimChart {
+      width: 280px !important;
+      height: 280px !important;
+    }
+    #searchInput {
+      width: 100%;
+      margin-bottom: 10px;
+      padding: 5px;
+      border-radius: 5px;
+      border: none;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+
+<div id="map">
+  <div id="chartContainer">
+    <input type="text" id="searchInput" placeholder="ابحث بالاسم..." />
+    <canvas id="victimChart"></canvas>
+    <div id="totalCount" style="margin-top:10px; font-weight:bold;"></div>
+  </div>
+</div>
+
+<script>
+const map = L.map('map').setView([31.9, 35.2], 9.49);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; OpenStreetMap & CartoDB',
+  maxZoom: 19,
+  subdomains: 'abcd'
+}).addTo(map);
+
+const dataURL = "https://script.google.com/macros/s/AKfycbxyuQJdQyxwegrNxYxgw-5AHCBg8_5Yq_mVveM6sMMZHmJ1Y_JnhGE9-Vxu5TP3penH/exec";
+
+let jsonData = [];
+let markers = [];
+let pieChart;
+
+// تحميل البيانات من Google Sheets Web App
+fetch(dataURL + "?t=" + new Date().getTime())
+  .then(res => res.json())
+  .then(obj => {
+    jsonData = obj.data || obj;
+    updateMapAndChart(jsonData);
+  })
+  .catch(err => console.error("خطأ في تحميل البيانات:", err));
+
+// تحديث الخريطة وChart
+function updateMapAndChart(data) {
+  addMarkers(data);
+  drawChart(data);
+  document.getElementById("totalCount").textContent = `إجمالي الشهداء: ${data.length}`;
+}
+
+// إضافة markers على الخريطة
+
+function addMarkers(data) {
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+
+  const colors = ['#d7ccc8', '#800020', '#c62828', '#a1887f', '#6d4c41'];
+
+  // 1️⃣ تجميع الشهداء حسب الاحداثيات
+  const grouped = {};
+
+  data.forEach(d => {
+    const lat = parseFloat(d.latitude);
+    const lon = parseFloat(d.longitude);
+    if (isNaN(lat) || isNaN(lon)) return;
+
+    const key = `${lat},${lon}`;
+    if (!grouped[key]) {
+      grouped[key] = {
+        lat,
+        lon,
+        victims: []
+      };
+    }
+    grouped[key].victims.push(d);
+  });
+
+  // 2️⃣ إنشاء Marker واحد لكل مجموعة
+  Object.values(grouped).forEach((group, idx) => {
+    const popupContent = group.victims.map((v, i) => `
+      <div style="margin-bottom:6px;">
+        <b>${i + 1}. ${v["الاسم"] || v["عنوان الملف"]}</b><br>
+        العمر: ${v["العمر"] || "-"}<br>
+        مكان الإقامة: ${v["مكان الإقامة"] || "-"}<br>
+        أداة القتل: ${v["اداة القتل"] || "-"}<br>
+        احتجاز الجثمان: ${v["احتجاز"] || "-"}
+      </div>
+      <hr>
+    `).join("");
+
+    const marker = L.circleMarker([group.lat, group.lon], {
+      radius: 6 + group.victims.length, // تكبر الدائرة حسب العدد
+      fillColor: colors[idx % colors.length],
+      color: "#880e4f",
+      weight: 1.5,
+      fillOpacity: 0.9
+    }).bindPopup(`
+      <b>عدد الشهداء في هذه النقطة: ${group.victims.length}</b>
+      <hr>
+      ${popupContent}
+    `);
+
+    marker.addTo(map);
+    markers.push(marker);
+  });
+}
+
+
+// رسم Pie Chart لتصنيف الضحية
+function drawChart(data) {
+  const ctx = document.getElementById("victimChart").getContext("2d");
+  const counts = {};
+  const colorMap = {
+    "طفل": "#f5deb3",
+    "طفلة": "#6d4c41",
+    "امرأة": "#4caf50",
+    "رجل": "#d32f2f",
+    "غير معروف": "#9e9e9e"
+  };
+
+  data.forEach(d => {
+    const type = d["صنف الضحية"]?.trim() || "غير معروف";
+    counts[type] = (counts[type] || 0) + 1;
+  });
+
+  const labels = Object.keys(counts);
+  const values = Object.values(counts);
+  const backgroundColors = labels.map(label => colorMap[label] || "#9e9e9e");
+
+  if (pieChart) pieChart.destroy();
+  pieChart = new Chart(ctx, {
+    type: 'pie',
+    data: {
+      labels: labels,
+      datasets: [{
+        data: values,
+        backgroundColor: backgroundColors,
+        hoverOffset: 8
+      }]
+    },
+    options: {
+      plugins: {
+        legend: { display: true, position: 'bottom' },
+        datalabels: {
+          color: 'white',
+          font: { weight: 'bold', size: 14 },
+          formatter: (value, ctx) => {
+            const label = ctx.chart.data.labels[ctx.dataIndex];
+            return `${value} - ${label}`;
+          }
+        }
+      }
+    },
+    plugins: [ChartDataLabels]
+  });
+}
+
+// وظيفة البحث بالاسم
+const searchInput = document.getElementById("searchInput");
+searchInput.addEventListener("input", function() {
+  const query = this.value.trim();
+  const filtered = jsonData.filter(d => (d["عنوان الملف"] || "").includes(query));
+  updateMapAndChart(filtered);
+});
+</script>
+
+</body>
+</html>
